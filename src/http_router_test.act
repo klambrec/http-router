@@ -28,6 +28,21 @@ def _ok_handler(ctx: http_router.Context, respond: proc(int, dict[str, str], str
     respond(200, {"Content-Type": "text/plain"}, "ok")
 
 
+def _test_matches_uses_dispatch_normalization():
+    r = http_router.Router()
+    r.get("/device/{{name}}/info", _ok_handler)
+    r.post("/device/{{name}}/resync", _ok_handler)
+    r.get("/extension/*tail", _ok_handler)
+    testing.assertEqual(r.matches(" get ", "/device//a/./info?x=1"), True)
+    testing.assertEqual(r.matches("GET", "/device/a%2Fb/info"), True)
+    testing.assertEqual(r.matches("GET", "/device/a/resync"), False)
+    testing.assertEqual(r.matches("POST", "/device/a/resync"), True)
+    testing.assertEqual(r.matches("GET", "/extension/a/b"), True)
+    testing.assertEqual(r.matches("GET", "/devices/a"), False)
+    testing.assertEqual(r.matches("GET", "/device/../a/info"), False)
+    testing.assertEqual(r.matches("GET", "/device\\a/info"), False)
+
+
 def _suffix_middleware(suffix: str) -> proc(proc(http_router.Context, proc(int, dict[str, str], str) -> None) -> None) -> proc(http_router.Context, proc(int, dict[str, str], str) -> None) -> None:
     def middleware(downstream_handler: proc(http_router.Context, proc(int, dict[str, str], str) -> None) -> None):
         def wrapped(ctx: http_router.Context, respond: proc(int, dict[str, str], str) -> None):

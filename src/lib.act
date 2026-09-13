@@ -64,6 +64,54 @@ def _parse_query_params(path: str) -> dict[str, str]:
     return query_params
 
 
+def parse_form_strict(text: str) -> dict[str, str]:
+    """Decode UTF-8 form data, rejecting ambiguous or malformed parameters.
+
+    Intended for authentication callbacks and other security-sensitive inputs.
+    Unlike Context.query(), values are percent-decoded and duplicate names
+    (including differently encoded copies of the same name) are rejected.
+    Error messages never contain input, which may include credentials.
+    """
+    if len(text) > 65536:
+        raise ValueError("Form data is too large")
+    result: dict[str, str] = {}
+    if text == "":
+        return result
+    fields = text.split("&")
+    if len(fields) > 128:
+        raise ValueError("Too many form parameters")
+    for field in fields:
+        # Reject before decoding: native UTF-8 strings can truncate at NUL.
+        if "%00" in field:
+            raise ValueError("NUL is not allowed in form parameters")
+        pair = field.split("=", 1)
+        try:
+            name = uri.unquote(pair[0].replace("+", " "))
+            value = uri.unquote(pair[1].replace("+", " ")) if len(pair) == 2 else ""
+        except ValueError:
+            raise ValueError("Invalid form encoding")
+        if name == "" or name in result:
+            raise ValueError("Empty or duplicate form parameter")
+        if any([ord(c) == 0 for c in name]) or any([ord(c) == 0 for c in value]):
+            raise ValueError("NUL is not allowed in form parameters")
+        result[name] = value
+    return result
+
+
+def parse_query_strict(raw_path: str) -> dict[str, str]:
+    """Decode the query of an HTTP request target without decoding its path."""
+    if "#" in raw_path:
+        raise ValueError("Fragment is not allowed in an HTTP request target")
+    parts = raw_path.split("?", 1)
+    return parse_form_strict(parts[1]) if len(parts) == 2 else {}
+
+
+def form_encode(parameters: dict[str, str]) -> str:
+    """Encode UTF-8 form/query parameters, including literal plus and slash."""
+    return "&".join([uri.quote(name, safe="") + "=" + uri.quote(value, safe="")
+                     for name, value in parameters.items()])
+
+
 def _is_param_segment(segment: str) -> bool:
     return segment.startswith(r"{") and segment.endswith(r"}") and len(segment) > 2
 
@@ -384,6 +432,18 @@ class Router(RouteRegistrar):
             handler(ctx, respond)
         except Exception:
             respond(500, {}, "")
+
+    def matches(self, method: str, raw_path: str) -> bool:
+        """Whether serve() would select a route, without invoking handlers.
+
+        Useful when dispatching between protected API routes and a public SPA
+        fallback. Shares exactly the request normalization used by serve().
+        """
+        try:
+            normalized = _normalize_path(raw_path)
+        except ValueError:
+            return False
+        return self._select_route(method.upper().strip(), _split_segments(normalized)) is not None
 
     def serve(self, request: http.Request, respond: proc(int, dict[str, str], str) -> None):
         request_path = request.path

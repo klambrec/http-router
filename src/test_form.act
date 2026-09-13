@@ -1,0 +1,47 @@
+import lib as http_router
+import testing
+
+
+def _test_auth_form_roundtrip():
+    values = {"code": "a+b/c==", "state": "abc%20", "name": "Żółć + 雪", "empty": ""}
+    testing.assertEqual(http_router.parse_form_strict(http_router.form_encode(values)), values)
+    testing.assertEqual(http_router.parse_form_strict("scope=openid+profile&code=a%2Bb%2Fc%3D"),
+                        {"scope": "openid profile", "code": "a+b/c="})
+    testing.assertEqual(http_router.parse_form_strict("empty&value=x=y"), {"empty": "", "value": "x=y"})
+    testing.assertEqual(http_router.parse_form_strict(""), {})
+
+
+def _test_auth_form_rejects_ambiguous_input():
+    for value in ["state=a&state=b", "state=a&st%61te=b", "a+b=1&a%20b=2",
+                  "code=%", "code=%GG", "code=%FF", "code=%C0%AF", "=value",
+                  "code=secret&", "code=%00", "na%00me=value", "&code=x"]:
+        rejected = False
+        try:
+            http_router.parse_form_strict(value)
+        except ValueError as exc:
+            rejected = True
+            testing.assertEqual("secret" in str(exc), False)
+        if not rejected:
+            raise ValueError("Accepted malformed fixture: " + value)
+
+
+def _test_auth_form_limits():
+    for value in ["a=" + "x" * 65536, "&".join([str(i) + "=x" for i in range(129)])]:
+        rejected = False
+        try:
+            http_router.parse_form_strict(value)
+        except ValueError:
+            rejected = True
+        testing.assertEqual(rejected, True)
+
+
+def _test_auth_query_preserves_path_encoding():
+    testing.assertEqual(http_router.parse_query_strict("/restconf/router=a%2Fb?code=a%252F&state=x"),
+                        {"code": "a%2F", "state": "x"})
+    testing.assertEqual(http_router.parse_query_strict("/auth/session"), {})
+    rejected = False
+    try:
+        http_router.parse_query_strict("/auth/callback?state=x#code=y")
+    except ValueError:
+        rejected = True
+    testing.assertEqual(rejected, True)
